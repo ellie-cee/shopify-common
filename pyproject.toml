@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools >= 70.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "CnrShopify"
+version = "1.0.1"
+dependencies = [
+ "beautifulsoup4",
+ "ShopifyAPI@git+https://github.com/Shopify/shopify_python_api.git",
+ "requests",
+ "json",
+ "csv",
+ "jmespath",
+ "python-slugify",
+ "paramiko",
+ "requests-toolbelt",
+ "xmltodict",
+ "cffi",
+ "pillow"
+]
+authors = [
+  {name = "Eleanor Cassady", email = "ellie@chelseaandrachel.com"},
+]
+description="Common ETL tasks for Shopify"
