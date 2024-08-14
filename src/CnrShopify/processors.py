@@ -1,4 +1,6 @@
 import csv
+import re
+import subprocess
 import traceback
 import requests
 import xmltodict
@@ -6,7 +8,7 @@ import json
 import os
 import sys
 from jmespath import search as jpath
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Comment, NavigableString
 from slugify import slugify
 import shopify
 from shopify_uploader import ShopifyUploader
@@ -19,6 +21,8 @@ from glob import glob
 from PIL import Image,ImageOps
 import time
 import argparse
+import pathlib
+import functools
 
 
 class Initializer:
@@ -47,9 +51,17 @@ class Initializer:
         )
         
 class ArticleProcessor:
-    def __init__(self,input):    
+    def __init__(self,inputFile=None):
+        self.inputFile = inputFile
+        if self.inputFile is None:
+            print("An input file is required!")
+            sys.exit()
+        else:
+            self.input = json.load(open(self.inputFile))
+        
         self.transport = None
         self.input = input
+        self.reprocess = False
         
         self.config_obj = json.load(open("config.json"))
         session = shopify.Session(f"{self.config('site')}.myshopify.com/admin",self.config("apiVersion"),self.config("token"))
@@ -72,6 +84,8 @@ class ArticleProcessor:
     def setTestHandles(self,handles):
         if handles is not None:
             self.testHandles = handles
+    def stripTags(self):
+        return ["style","script"]
         
     def config(self,key,default=None):
         return self.config_obj.get(key,default)
@@ -111,32 +125,49 @@ class ArticleProcessor:
         retry = True
         while attempts<10 and retry:
             try:
-                return requests.get(
+                res =  requests.get(
                     url,
                     headers={
                         "Referer":self.config("blog_url"),
                         "User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
                     }
                 )
+                if res.status_code == 404:
+                    return None
+                return res
             except:
                 attempts = attempts+1
                 
     def filenameFor(self,path):
+        newPath = None
         if "wp-content/uploads" in path:
-            return "-".join(path.split("/")[-3:])
+            newPath = "-".join(path.split("/")[-3:])
         else:
-            return path.split("/")[-1]
+            newPath = path.split("/")[-1]
+        parsed = pathlib.Path(newPath)
+        if parsed.suffix and parsed.suffix!="":
+            return f"{slugify(parsed.stem)}{parsed.suffix}".replace("jpeg","jpg")
+        else:
+            return slugify(parsed.stem).replace("jpeg","jpg")
+        return newPath
     
-
+    def isImage(self,path):
+        return subprocess.check_output(["file","--mime-type",path]).decode("utf-8").split(":")[-1].strip().startswith("image")
+        
     def download(self,url,backupFilename="image"):
         parsedUrl = urlparse(url)
         
         filename = self.filenameFor(url)
+        
         fileContents = None
-        if not re.search(r'\.(jpg|jpeg|png|gif|webp)$',filename.lower()):
+        
+        if not pathlib.Path(filename).suffix.lower() in [".jpg",".jpeg",".png",".gif",".webp"]:
+        #if not re.search(r'\.(jpg|jpeg|png|gif|webp)$',filename.lower()):
             existing = glob(f"download/{backupFilename}.*")
             if len(existing):
                 filename = existing[-1].split("/")[-1]
+            
+            
                 
             else:
                 res = requests.head(url)
@@ -148,29 +179,55 @@ class ArticleProcessor:
                             "User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
                         }
                     )
-                    fileContents = res.content
+                    if res.status_code==200:
+                        fileContents = res.content
+                    else:
+                        fileContents = None             
                 filename = f"{backupFilename}{mimetypes.guess_extension(res.headers['Content-Type'])}"
+                
                 print(f"downloading {url} as {filename}",file=sys.stderr)
-        if not os.path.isfile(f"download/{filename}"):
+        
+        if not os.path.isfile(f"download/{filename}") or not self.isImage(f"download/{filename}"    ):
             print(f"downloading {url}",file=sys.stderr)
             if fileContents is None:
-                fileContents = self.fetch(url).content
-                
-            open(f"download/{filename}","wb").write(fileContents)
-            self.uploadSFTP(filename)
+                res = self.fetch(url)
+                fileContents = res.content if res else None
+            if fileContents is not None:   
+                open(f"download/{filename}","wb").write(fileContents)
+                try:
+                    self.fit20MP(filename)
+                except:
+                    print(f"invalid image {filename}",file=sys.stderr)
+                    traceback.print_exc()
+                    return None
+            else:
+                return None
         else:
             try:
-                image = Image.open(f"download/{filename}")
-                width,height = image.size
-                if (width*height)>(5600*3740):
-                    print(f"Image {filename} is way to big!",file=sys.stderr)
-                    ImageOps.fit(image,(5600,3740)).save(f"download/{filename}")
-                    self.uploadSFTP(filename)
+                self.fit20MP(filename)
             except:
+                print(f"invalid image {filename}",file=sys.stderr)
+                traceback.print_exc()
                 return None
                 print(f"invalid image {filename}",file=sys.stderr)
                 
         return filename
+    
+    def fit20MP(self,filename):
+        image = Image.open(f"download/{filename}")
+        width,height = image.size
+        if (width*height)>(5600*3740):
+            reduce_factor = 0
+            if (width>height):
+                reduce_factor = 1-(5600/width)
+            else:
+                reduce_factor = 1-(3740/height)
+                    
+            print(f"Image {filename} is way to big!",file=sys.stderr)
+            print(f"{width}x{height} to {int(width*reduce_factor)}x{int(height*reduce_factor)} {reduce_factor}")
+            ImageOps.cover(image,(int(width*reduce_factor),int(height*reduce_factor))).save(f"download/{filename}")
+            
+        self.uploadSFTP(filename)
         
             
             
@@ -222,7 +279,14 @@ class ArticleProcessor:
         )
             
         return iframe
-      
+    
+    def htmlPreProcess(self,soup):
+        return soup
+    def htmlPostProcess(self,soup):
+        return soup
+    def stripAttrs(self):
+        return []
+    
     def process_article(self,post):
         imageCount = 1
         post["redirects"] = {}
@@ -236,13 +300,17 @@ class ArticleProcessor:
             articleImage = self.download(post.get("articleImage"))
             
         soup = BeautifulSoup(post.get("html"),'html.parser')
+        soup = self.htmlPreProcess(soup)
+        
+        for comment in soup.find_all(string=lambda text: isinstance(text, Comment)):
+            comment.extract()
         for noscript in soup.find_all("noscript"):
             noscript.decompose()
-        for tag in soup.descendants:
-            if type(tag) is bs4.element.Comment:
-                
-                tag.extract()
-            elif type(tag) is bs4.element.NavigableString:
+        for tag in soup.find_all():
+            if tag.name in self.stripTags():
+                tag.decompose()
+                continue
+            elif isinstance(tag,NavigableString):
                 content = str(tag)
                 if content.startswith("[embed]"):
                     tag.replaceWith(self.youtubeEmbed(soup,content[7:content.index("[/embed]")]))
@@ -250,8 +318,8 @@ class ArticleProcessor:
                     tag.replaceWith(self.youtubeEmbed(soup,content))
             elif tag.text.strip().startswith("https://www.youtube.com"):
                  tag.replaceWith(self.youtubeEmbed(soup,tag.text.strip()))
-            elif hasattr(tag,"attrs"):
-                tag.attrs = {key:value for key,value in tag.attrs.items() if key not in ["class"]}
+            if hasattr(tag,"attrs") and tag.attrs is not None:
+                tag.attrs = {key:value for key,value in tag.attrs.items() if key not in self.stripAttrs()}
                 
         for embed in soup.find_all("figure",class_="wp-block-embed-youtube"):
             inner = embed.find("div",class_="wp-block-embed__wrapper")
@@ -291,15 +359,18 @@ class ArticleProcessor:
                     backupFilename=defaultFilename
                 )
                 del img.attrs["data-lazy-src"]
-                uploadToShopify = f"{self.config('hostUrl')}/{filename}"
+                if filename:
+                    uploadToShopify = f"{self.config('hostUrl')}/{filename}"
             elif "src" in img.attrs:
                 if not img.attrs.get("src").startswith("data/"):
                     filename = self.download(
                         img.attrs.get("src"),
                         backupFilename=defaultFilename
                     )
-                    uploadToShopify = f"{self.config('hostUrl')}/{filename}"
+                    if filename:
+                        uploadToShopify = f"{self.config('hostUrl')}/{filename}"
             if filename is None:
+                print(f"{defaultFilename} is invalid.",file=sys.stderr)
                 img.decompose()
             elif uploadToShopify is not None:
                 print(f"Uploading {filename} to Shopify")
@@ -310,10 +381,11 @@ class ArticleProcessor:
                 img.attrs["data-sizes"] = "auto"
                 uploaded = self.uploader.upload_image(uploadToShopify)
                 img.attrs["data-src"] = uploaded["url"] if uploaded is not None  and "url" in uploaded else "" 
-                print(img.attrs["data-src"],file=sys.stderr)
+                
                 img.attrs["class"] = "lazyload lazyload-fade"
                 post["images"].append(filename)
                 img.attrs["data-original"] = f"{img.attrs['data-src'].split('?')[0]}?width=500"
+                img.attrs["src"] = f"{img.attrs['data-src'].split('?')[0]}?width=500"
             else:
                 post["images"].append(filename) 
             
@@ -325,7 +397,8 @@ class ArticleProcessor:
             if x in post and type(post[x]) is list:
                 post["all_tags"] = post["all_tags"]+post[x]
         post["all_tags"] = list(filter(lambda tag: tag not in self.blog_titles and len(tag)>1,set(post["all_tags"])))
-        post["html"] = str(soup)
+        
+        post["html"] = str(self.htmlPostProcess(soup))
         
         postObj = shopify.Article()
         if "shopifyId" in post:
@@ -386,13 +459,27 @@ class ArticleProcessor:
         
         return post
     def run(self):
+        skip = False
+        if hasattr(self,"startAt") and self.startAt is not None:
+            skip = True
+            
         for article in self.input.get("poasts"):
+            if article.get("shopifyId") is not None:
+                if not self.reprocess:
+                    print(f"skipping {article.get('handle')}: already processed",file=sys.stderr)
+                    continue
+            if skip and article.get("handle")!=self.startAt:
+                print(f"skipping {article.get('handle')}",file=sys.stderr)
+                continue
+            elif skip and article.get("handle")==self.startAt:
+                skip = False
+                continue
+            
             if article.get("handle") is None:
                 continue
             try:
                 self.handles[article.get("handle")] = f"/blogs/{self.main_category(article)['handle']}/{article.get('handle')}"
             except:
-                print(json.dumps([article,self.blogs,self.main_category(article)],indent=2))
                 sys.exit()
             if "/?p=" in article.get("url"):
                 self.redirects[f"/{article.get('handle')}/"] = self.handles[article.get("handle")]
@@ -411,7 +498,10 @@ class ArticleProcessor:
                 try:
                     article = self.process_article(article)
                     proceed = False
+                except KeyboardInterrupt as e:
+                    sys.exit()
                 except:
+                    traceback.print_exc()
                     retries = retries+1
                     
         
@@ -419,7 +509,10 @@ class ArticleProcessor:
     def processNav(self,url,root):
         pass
     
-    def write(self,path):
+    def write(self,path=None):
+        if path is None:
+            path = self.inputFile
+            
         open(path,"w").write(json.dumps(self.input,indent=1))
         return self
     def writeRedirects(self,path):
@@ -429,23 +522,37 @@ class ArticleProcessor:
             writer.writerow({
                 "URL":url,
                 "TARGET":target
-        })
+            })
 
 class WordpressImporter:
-    def __init__(self,wordpressFile,useCache=True):
+    def __init__(self,wordpressFile,useCache=True,outputFile=None):
         self.useCache = useCache
         self.input = xmltodict.parse(open(wordpressFile).read().replace("wp:",""))
         self.config_obj = json.load(open("config.json"))
+        self.outputFile = outputFile
+        self.parsed = {"poasts":[]}
+        
+        if self.outputFile is not None:
+            if pathlib.Path(self.outputFile).exists():
+                self.parsed = json.load(open(self.outputFile))
+        self.handles = [x.get("handle") for x in self.parsed.get("poasts")]
+            
+                
     def config(self,key,default=None):
         return self.config_obj.get(key,default)
     
     def data(self):
         return self.input
+    
+    def exists(self,post):
+        return post.get("handle")
         
     def run(self):
-        self.parsed = {
-             "poasts":[self.postDetails(post,self.input) for post in filter(lambda x:x["post_type"]=="post",jpath("rss.channel.item",self.input))]
-        }
+        for post in filter(lambda x:x["post_type"]=="post",jpath("rss.channel.item",self.input)):
+            if post.get("post_name") in self.handles():
+                print(f"Skipping {post.get('post_name')}")
+            else:
+                self.parsed.get("poasts").append(self.postDetails(post,self.input))
         return self
     def cached(self,handle):
         if not self.useCache:
@@ -460,7 +567,10 @@ class WordpressImporter:
 
     def parsed(self):
         return self.parsed
-    def write(self,outputFile):
+    def write(self,outputFile=None):
+        if outputFile is None:
+            outputFile = self.outputFile
+        
         open(outputFile,"w").write(json.dumps(self.parsed(),indent=1))
         return self
     
