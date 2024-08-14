@@ -38,7 +38,7 @@ class ShopifyETL:
         variables["cursor"] = None
         ret = []
         proceed = True
-        recordSet = shopify.GraphQL().execute(query,variables)
+        recordSet = json.loads(shopify.GraphQL().execute(query,variables))
         try:
             while proceed:
                 for record in jpath(f"data.{queryRoot}.nodes || []",recordSet):
