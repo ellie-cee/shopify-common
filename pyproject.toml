@@ -8,6 +8,7 @@ version = "1.0.8"
 dependencies = [
  "beautifulsoup4",
  "ShopifyAPI@git+https://github.com/Shopify/shopify_python_api.git",
+ "shopify-image-uploader@git+https://github.com/ellie-cee/shopify-image-uploader.git",
  "requests",
  "jmespath",
  "python-slugify",
