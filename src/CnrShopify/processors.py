@@ -576,7 +576,17 @@ class WordpressImporter:
     def run(self):
         for post in filter(lambda x:x["post_type"]=="post",jpath("rss.channel.item",self.input)):
             if post.get("post_name") in self.handles:
-                print(f"Skipping {post.get('post_name')}")
+                found = False
+                index = 0
+                for poast in self.parsed["poasts"]:
+                    if poast.get("handle")==post.get("post_name"):
+                        if poast.get("shopifyId") is None:
+                            found = True
+                            self.parsed["poasts"][index] = self.postDetails(post)
+                            break
+                    index = index+1
+                if not found:
+                    print(f"Skipping {post.get('post_name')}")            
             else:
                 self.parsed.get("poasts").append(self.postDetails(post))
         return self
@@ -646,7 +656,7 @@ class WordpressImporter:
             return ret[0].get("meta_value")
         return None
     def innerHTML(self,soup):
-        soup.find("div",class_="elementor-widget-theme-post-content").find("div",class_="elementor-widget-container")
+        return soup.find("div",class_="elementor-widget-theme-post-content").find("div",class_="elementor-widget-container")
         
     def postContent(self,url,handle):
         attempts = 0
@@ -666,10 +676,11 @@ class WordpressImporter:
                 ).content.decode("utf-8")
                 soup = BeautifulSoup(content,'html.parser')
                 retry = False
-                content = str(self.innerHTML())
+                content = str(self.innerHTML(soup))
                 self.cache(handle,content)
                 return content
             except:
+                traceback.print_exc()
                 print(f"retrying {url}",file=sys.stderr)
                 attempts = attempts+1
             
