@@ -1,4 +1,5 @@
 import csv
+import traceback
 import shopify
 import requests
 import json
@@ -38,14 +39,20 @@ class ShopifyETL:
         ret = []
         proceed = True
         recordSet = shopify.GraphQL().execute(query,variables)
-        while proceed:
-            for record in jpath(f"data.{queryRoot}.nodes || []",recordSet):
-                ret.append(record)
-            pageInfo = jpath(f"data.{queryRoot}.pageInfo",recordSet)
-            if pageInfo and pageInfo.get("hasNextPage",False):
-                variables["cursor"] = pageInfo.get("endCursor")
-            else:
-                proceed = False
+        try:
+            while proceed:
+                for record in jpath(f"data.{queryRoot}.nodes || []",recordSet):
+                    ret.append(record)
+                pageInfo = jpath(f"data.{queryRoot}.pageInfo",recordSet)
+                if pageInfo and pageInfo.get("hasNextPage",False):
+                    variables["cursor"] = pageInfo.get("endCursor")
+                else:
+                    proceed = False
+        except:
+            print(json.dumps(recordSet,indent=2))
+            traceback.print_exc()
+            
+            return []
     
         
 
