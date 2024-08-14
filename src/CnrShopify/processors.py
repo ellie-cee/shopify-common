@@ -666,7 +666,7 @@ class WordpressImporter:
                 ).content.decode("utf-8")
                 soup = BeautifulSoup(content,'html.parser')
                 retry = False
-                content = str(self.innerHTML)
+                content = str(self.innerHTML())
                 self.cache(handle,content)
                 return content
             except:
