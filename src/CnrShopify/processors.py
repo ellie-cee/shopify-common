@@ -60,7 +60,7 @@ class ArticleProcessor:
             self.input = json.load(open(self.inputFile))
         
         self.transport = None
-        self.input = input
+        
         self.reprocess = False
         
         self.config_obj = json.load(open("config.json"))
@@ -287,6 +287,17 @@ class ArticleProcessor:
     def stripAttrs(self):
         return []
     
+    def getPostByHandle(self,handle,blog=None):
+        for article in shopify.Article.find(handle=handle):
+            if article.handle==handle:
+                if blog is not None:
+                    if blog==article.blog_id:
+                        return article
+                else:
+                    return article
+
+        return None
+    
     def process_article(self,post):
         imageCount = 1
         post["redirects"] = {}
@@ -295,6 +306,7 @@ class ArticleProcessor:
         blog = self.main_category(post)
         post["blog"] = blog
         
+        print(f"Processing {post.get('handle')}")
         articleImage = None
         if post.get("articleImage") is not None:
             articleImage = self.download(post.get("articleImage"))
@@ -362,7 +374,7 @@ class ArticleProcessor:
                 if filename:
                     uploadToShopify = f"{self.config('hostUrl')}/{filename}"
             elif "src" in img.attrs:
-                if not img.attrs.get("src").startswith("data/"):
+                if not img.attrs.get("src").startswith("data/") and "cdn.shopify.com" not in img.attrs.get("src"):
                     filename = self.download(
                         img.attrs.get("src"),
                         backupFilename=defaultFilename
@@ -401,8 +413,14 @@ class ArticleProcessor:
         post["html"] = str(self.htmlPostProcess(soup))
         
         postObj = shopify.Article()
-        if "shopifyId" in post:
-            postObj = shopify.Article.get(post["shopifyId"])
+        if post.get("shopifyId") is not None:
+            try:
+                postObj = shopify.Article.get(post["shopifyId"])
+            except:
+                print(f"error processing {json.dumps(post,indent=1)}")
+                sys.exit()
+                postObj = shopify.Article()
+                
         postObj.title =post["title"]
         postObj.body_html = post["html"]
         if "blog" in post and post["blog"]["id"] is not None:
@@ -439,42 +457,32 @@ class ArticleProcessor:
                     post["excerpt"]
                 )
         else:
-            found = False
-            for article in shopify.Article.find(handle=post["handle"]):
-                if article.handle==postObj.handle and article.blog_id==postObj.blog_id:
-                    
-                    found = True
-                    post["shopifyId"] = article.id
-                    postObj.id = article.id
-                    if postObj.save():
-                        print(f"Updated Article {post['handle']}",file=sys.stderr)
-                    else:
-                        print(f"Could not Update Article {post['handle']}",file=sys.stderr)
-                    break
-            if not found:
+            article = self.getPostByHandle(post["handle"],post["blog"]["id"])
+            if article is not None:
+                post["shopifyId"] = article.id
+                postObj.id = article.id
+                if postObj.save():
+                    print(f"Updated Article {post['handle']}",file=sys.stderr)
+                else:
+                    print(f"Could not Update Article {post['handle']}",file=sys.stderr)
+            else:
                 print(f"Could not Create Article {post['handle']}",file=sys.stderr)
            
-        
-        
-        
         return post
     def run(self):
-        skip = False
-        if hasattr(self,"startAt") and self.startAt is not None:
-            skip = True
+        
             
-        for article in self.input.get("poasts"):
+           
+        
+        poasts = self.input.get("poasts")
+        if len(self.testHandles)>0:
+            poasts = list(filter(lambda post:post["handle"] in self.testHandles,poasts))
+        
+        for article in poasts:
             if article.get("shopifyId") is not None:
                 if not self.reprocess:
                     print(f"skipping {article.get('handle')}: already processed",file=sys.stderr)
                     continue
-            if skip and article.get("handle")!=self.startAt:
-                print(f"skipping {article.get('handle')}",file=sys.stderr)
-                continue
-            elif skip and article.get("handle")==self.startAt:
-                skip = False
-                continue
-            
             if article.get("handle") is None:
                 continue
             try:
@@ -488,10 +496,7 @@ class ArticleProcessor:
             for cat in article.get("categories"):
                 self.categories[cat] = True
             self.main_categories[article.get("category")] = True
-        poasts = self.input.get("poasts")
-        if len(self.testHandles)>0:
-            poasts = list(filter(lambda post:post["handle"] in self.testHandles,poasts))
-        for article in poasts:
+            
             retries = 0
             proceed = True
             while proceed and retries<5:
@@ -508,7 +513,27 @@ class ArticleProcessor:
         return self
     def processNav(self,url,root):
         pass
-    
+    def getIds(self):
+        for post in self.input.get("poasts"):
+            print(f"finding id for {post.get('handle')}",file=sys.stderr)
+            post["blog"] = self.main_category(post)
+            print(f"setting blog to {post['blog']['id']}:{post['blog']['title']}")
+            postObj = None
+            if post.get("shopifyId") is not None:
+                try:
+                    postObj = shopify.Article.get(post["shopifyId"])
+                    if postObj.id!=post.get("shopifyId"):
+                        post["shopifyId"]=postObj.id
+                        print(f"setting to {postObj.id}",file=sys.stderr)
+                except:
+                    postObj = self.getPostByHandle(post.get("handle"))
+                    if postObj is not None:
+                        post["shopifyId"]=postObj.id
+                        print(f"setting to {postObj.id}",file=sys.stderr)
+                        
+        return self               
+            
+        
     def write(self,path=None):
         if path is None:
             path = self.inputFile
@@ -536,6 +561,7 @@ class WordpressImporter:
             if pathlib.Path(self.outputFile).exists():
                 self.parsed = json.load(open(self.outputFile))
         self.handles = [x.get("handle") for x in self.parsed.get("poasts")]
+      
             
                 
     def config(self,key,default=None):
@@ -549,10 +575,10 @@ class WordpressImporter:
         
     def run(self):
         for post in filter(lambda x:x["post_type"]=="post",jpath("rss.channel.item",self.input)):
-            if post.get("post_name") in self.handles():
+            if post.get("post_name") in self.handles:
                 print(f"Skipping {post.get('post_name')}")
             else:
-                self.parsed.get("poasts").append(self.postDetails(post,self.input))
+                self.parsed.get("poasts").append(self.postDetails(post))
         return self
     def cached(self,handle):
         if not self.useCache:
@@ -571,7 +597,7 @@ class WordpressImporter:
         if outputFile is None:
             outputFile = self.outputFile
         
-        open(outputFile,"w").write(json.dumps(self.parsed(),indent=1))
+        open(outputFile,"w").write(json.dumps(self.parsed,indent=1))
         return self
     
     def arrayVal(self,array,key):
@@ -670,7 +696,7 @@ class WordpressImporter:
             }
             if retval["status"]=="active":
                 print(f"Downloading from: {post.get('link')}",file=sys.stderr)
-                retval["html"]=self.postContent(post.get("link"))
+                retval["html"]=self.postContent(post.get("link"),retval.get("handle"))
                 time.sleep(1)
             else:
                 retval["html"] = post.get("content:encoded")

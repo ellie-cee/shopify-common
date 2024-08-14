@@ -4,7 +4,6 @@ import requests
 import json
 import DictSearch
 
-
 class ShopifyETL:
     def __init__(self,domain,token,version="2024-04"):
         self.token = token
