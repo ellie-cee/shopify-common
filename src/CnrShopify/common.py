@@ -23,7 +23,7 @@ class ShopifyETL:
             ret[row[fieldname]] = row
             
         return ret
-    def graphql(query,variables={}):
+    def graphql(self,query,variables={}):
         return json.loads(shopify.GraphQL().execute(query,variables))
     
     def records(self,api_object):
