@@ -2,7 +2,7 @@ import csv
 import shopify
 import requests
 import json
-import DictSearch
+from jmespath import search as jpath
 
 class ShopifyETL:
     def __init__(self,domain,token,version="2024-04"):
@@ -39,10 +39,9 @@ class ShopifyETL:
         proceed = True
         recordSet = shopify.GraphQL().execute(query,variables)
         while proceed:
-            rec = DictSearch(recordSet)
-            for record in rec.search(f"data.{queryRoot}.nodes || []"):
+            for record in jpath(f"data.{queryRoot}.nodes || []",recordSet):
                 ret.append(record)
-            pageInfo = rec.search(f"data.{queryRoot}.pageInfo")
+            pageInfo = jpath(f"data.{queryRoot}.pageInfo",recordSet)
             if pageInfo and pageInfo.get("hasNextPage",False):
                 variables["cursor"] = pageInfo.get("endCursor")
             else:
