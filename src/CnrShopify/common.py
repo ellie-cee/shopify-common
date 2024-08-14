@@ -53,7 +53,7 @@ class ShopifyETL:
             traceback.print_exc()
             
             return []
-    
+        return ret
         
 
 class Article(ShopifyETL):
