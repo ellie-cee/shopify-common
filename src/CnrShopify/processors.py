@@ -297,6 +297,9 @@ class ArticleProcessor:
                     return article
 
         return None
+    def finalizeTags(self,post):
+        return ",".join(post.get("all_tags",[]))
+    
     
     def process_article(self,post):
         imageCount = 1
@@ -328,7 +331,7 @@ class ArticleProcessor:
                     tag.replaceWith(self.youtubeEmbed(soup,content[7:content.index("[/embed]")]))
                 elif content.startswith("https://youtu.be"):
                     tag.replaceWith(self.youtubeEmbed(soup,content))
-            elif tag.text.strip().startswith("https://www.youtube.com"):
+            elif    tag.text.strip().startswith("https://www.youtube.com"):
                  tag.replaceWith(self.youtubeEmbed(soup,tag.text.strip()))
             if hasattr(tag,"attrs") and tag.attrs is not None:
                 tag.attrs = {key:value for key,value in tag.attrs.items() if key not in self.stripAttrs()}
@@ -429,7 +432,7 @@ class ArticleProcessor:
         postObj.handle = post["handle"]
         postObj.summary_html = post["excerpt"] if post["excerpt"] else ""
         postObj.updated_at  = post["published"]
-        postObj.attributes["tags"]=", ".join(post['all_tags'])
+        postObj.attributes["tags"]= self.finalizeTags(post)
         postObj.published = False
         postObj.author=post["author"] if post["author"] is not None else "Dr Livingood"
                 
