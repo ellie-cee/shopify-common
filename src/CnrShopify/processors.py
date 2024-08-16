@@ -661,9 +661,16 @@ class WordpressImporter:
                 self.parsed = json.load(open(self.outputFile))
         self.post_handles = [x.get("handle") for x in self.parsed.get("poasts")]
         self.page_handles = [x.get("handle") for x in self.parsed.get("pages")]
+    
       
             
-                
+    def excludedPage(self,handle):
+        return False
+        
+    def excludePost(self,handle):
+        return False
+        
+    
     def config(self,key,default=None):
         return self.config_obj.get(key,default)
     
@@ -675,6 +682,9 @@ class WordpressImporter:
         
     def run(self):
         for post in filter(lambda x:x["post_type"]=="post",jpath("rss.channel.item",self.input)):
+            if self.excludedPost(post.get("post_name")):
+                print(f"Skipping {post.get('post_name')}: excluded")
+                continue
             if post.get("post_name") in self.post_handles:
                 found = False
                 index = 0
@@ -694,6 +704,9 @@ class WordpressImporter:
                 if details is not None:
                     self.parsed.get("poasts").append(details)
         for page in filter(lambda x:x["post_type"]=="page",jpath("rss.channel.item",self.input)):
+            if self.excludedPage(page.get("post_name")):
+                print(f"Skipping {post.get('post_name')}: excluded")
+                continue
             if page.get("content:encoded") is None or page.get("content:encoded")=="":
                 continue
             if page.get("post_name") in self.page_handles:
