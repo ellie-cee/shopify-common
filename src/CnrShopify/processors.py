@@ -579,7 +579,6 @@ class ArticleProcessor:
             if "/?p=" in article.get("url"):
                 self.redirects[f"/{page.get('handle')}/"] = self.handles[page.get("handle")]
             else:
-                print(type(page),json.dumps(page,indent=1))
                 self.redirects[page.get("url").replace(self.config('source_url'),"")] = self.handles[page.get("handle")]
         
             retries = 0
@@ -664,7 +663,7 @@ class WordpressImporter:
     
       
             
-    def excludedPage(self,handle):
+    def excludePage(self,handle):
         return False
         
     def excludePost(self,handle):
@@ -682,7 +681,7 @@ class WordpressImporter:
         
     def run(self):
         for post in filter(lambda x:x["post_type"]=="post",jpath("rss.channel.item",self.input)):
-            if self.excludedPost(post.get("post_name")):
+            if self.excludePost(post.get("post_name")):
                 print(f"Skipping {post.get('post_name')}: excluded")
                 continue
             if post.get("post_name") in self.post_handles:
@@ -704,8 +703,8 @@ class WordpressImporter:
                 if details is not None:
                     self.parsed.get("poasts").append(details)
         for page in filter(lambda x:x["post_type"]=="page",jpath("rss.channel.item",self.input)):
-            if self.excludedPage(page.get("post_name")):
-                print(f"Skipping {post.get('post_name')}: excluded")
+            if self.excludePage(page.get("post_name")):
+                print(f"Skipping {page.get('post_name')}: excluded")
                 continue
             if page.get("content:encoded") is None or page.get("content:encoded")=="":
                 continue
