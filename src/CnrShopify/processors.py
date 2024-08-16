@@ -498,7 +498,7 @@ class ArticleProcessor:
                 page.get("articleImage"),
                 backupFilename=f"{page.get('handle')}-featured"
             )
-            uploaded = self.uploader(f"{self.config('hostUrl')}/{articleImage}")
+            uploaded = self.uploader.upload_image(f"{self.config('hostUrl')}/{articleImage}")
             page["articleImage"] = uploaded.get("url")
             
             
