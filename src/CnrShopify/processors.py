@@ -80,6 +80,7 @@ class ArticleProcessor:
         self.main_categories = {}
         self.nav = {}
         self.nav_parents = {}
+        self.overwritePages = False
         
     def setTestHandles(self,handles):
         if handles is not None:
@@ -297,24 +298,24 @@ class ArticleProcessor:
                     return article
 
         return None
+    def getPageByHandle(self,handle):
+        for page in shopify.Page.find(handle=handle):
+            if page.handle==handle:
+                return page
+
+        return None
     def finalizeTags(self,post):
         return ",".join(post.get("all_tags",[]))
     
-    
-    def process_article(self,post):
+    def processContent(self,page):
         imageCount = 1
-        post["redirects"] = {}
-        post["links"] = []
-        post["images"] = []
-        blog = self.main_category(post)
-        post["blog"] = blog
+        page["redirects"] = {}
+        page["links"] = []
+        page["images"] = []
         
-        print(f"Processing {post.get('handle')}")
-        articleImage = None
-        if post.get("articleImage") is not None:
-            articleImage = self.download(post.get("articleImage"))
+        print(f"Processing {page.get('handle')}")
             
-        soup = BeautifulSoup(post.get("html"),'html.parser')
+        soup = BeautifulSoup(page.get("html"),'html.parser')
         soup = self.htmlPreProcess(soup)
         
         for comment in soup.find_all(string=lambda text: isinstance(text, Comment)):
@@ -359,15 +360,15 @@ class ArticleProcessor:
                         link["href"] = "/"
                         
                     if handle in self.handles:
-                        post["redirects"][url] = self.handles[handle]
+                        page["redirects"][url] = self.handles[handle]
                         self.redirects[url] = self.handles[handle]
-                        link["href"] = post["redirects"][url]
-                    post["links"].append(url)
+                        link["href"] = page["redirects"][url]
+                    page["links"].append(url)
         articleImageCount = 0            
         for img in soup.find_all("img"):
             articleImageCount = articleImageCount + 1
             uploadToShopify = None
-            defaultFilename=f"{post.get('handle')}-{articleImageCount}"
+            defaultFilename=f"{page.get('handle')}-{articleImageCount}"
             if "data-lazy-src" in img.attrs:
                 filename = self.download(
                     img.attrs.get("data-lazy-src"),
@@ -398,24 +399,35 @@ class ArticleProcessor:
                 img.attrs["data-src"] = uploaded["url"] if uploaded is not None  and "url" in uploaded else "" 
                 
                 img.attrs["class"] = "lazyload lazyload-fade"
-                post["images"].append(filename)
+                page["images"].append(filename)
                 img.attrs["data-original"] = f"{img.attrs['data-src'].split('?')[0]}?width=500"
                 img.attrs["src"] = f"{img.attrs['data-src'].split('?')[0]}?width=500"
             else:
-                post["images"].append(filename) 
+                page["images"].append(filename) 
+                
+        page["html"] = str(self.htmlPostProcess(soup))
+        return page
+    
+    
+    def process_article(self,post):
+        imageCount = 1
+        blog = self.main_category(post)
+        post["blog"] = blog
+        
+        articleImage = None
+        if post.get("articleImage") is not None:
+            articleImage = self.download(post.get("articleImage"))
             
+        post = self.processContent(post)
         post["tags"].append("_imported")
         post["tags"].append(f"_imported-as-{post['status']}")
-        
         post["all_tags"] = []
         for x in ["tags","categories"]:
             if x in post and type(post[x]) is list:
                 post["all_tags"] = post["all_tags"]+post[x]
         post["all_tags"] = list(filter(lambda tag: tag not in self.blog_titles and len(tag)>1,set(post["all_tags"])))
-        
-        post["html"] = str(self.htmlPostProcess(soup))
-        
         postObj = shopify.Article()
+        
         if post.get("shopifyId") is not None:
             try:
                 postObj = shopify.Article.get(post["shopifyId"])
@@ -472,6 +484,48 @@ class ArticleProcessor:
                 print(f"Could not Create Article {post['handle']}",file=sys.stderr)
            
         return post
+    
+    
+    
+    def processPage(self,page):
+        
+        page = self.processContent(page)
+        articleImage = None
+        if page.get("articleImage") is not None:
+            articleImage = self.download(page.get("articleImage"))
+            
+        pageObj = shopify.Page()
+        if page.get("shopifyId") is not None:
+            try:
+                pageObj = shopify.Page.get(page["shopifyId"])
+            except:
+                print(f"error processing {json.dumps(page,indent=1)}")
+                sys.exit()
+                pageObj = shopify.Article()
+                
+        pageObj.title =page["title"]
+        pageObj.body_html = page["html"]        
+        pageObj.handle = page["handle"]
+        pageObj.published = True
+                
+        if pageObj.save():
+            page["shopifyId"] = pageObj.id
+            print(f"Created Page {page['handle']}",file=sys.stderr)
+        else:
+            if not self.overwritePages:
+                return page
+            exp = self.getPageByHandle(page["handle"])
+            if exp is not None:
+                page["shopifyId"] = exp.id
+                pageObj.id = exp.id
+                if pageObj.save():
+                    print(f"Updated Article {page['handle']}",file=sys.stderr)
+                else:
+                    print(f"Could not Update Page {page['handle']}",file=sys.stderr)
+            else:
+                print(f"Could not Create Page {page['handle']}",file=sys.stderr)
+           
+        return page
     def run(self):
         
             
@@ -511,11 +565,40 @@ class ArticleProcessor:
                 except:
                     traceback.print_exc()
                     retries = retries+1
-                    
+        for page in self.input.get("pages"):
+            if page.get("shopifyId") is not None:
+                if not self.reprocess:
+                    print(f"skipping {page.get('handle')}: already processed",file=sys.stderr)
+                    continue
+            if page.get("handle") is None:
+                continue
+            try:
+                self.handles[page.get("handle")] = f"/pages/{page.get('handle')}"
+            except:
+                sys.exit()
+            if "/?p=" in article.get("url"):
+                self.redirects[f"/{page.get('handle')}/"] = self.handles[page.get("handle")]
+            else:
+                print(type(page),json.dumps(page,indent=1))
+                self.redirects[page.get("url").replace(self.config('source_url'),"")] = self.handles[page.get("handle")]
+        
+            retries = 0
+            proceed = True
+            while proceed and retries<5:
+                try:
+                    page = self.processPage(page)
+                    proceed = False
+                except KeyboardInterrupt as e:
+                    sys.exit()
+                except:
+                    traceback.print_exc()
+                    retries = retries+1
+
         
         return self
     def processNav(self,url,root):
         pass
+    
     def getIds(self):
         for post in self.input.get("poasts"):
             print(f"finding id for {post.get('handle')}",file=sys.stderr)
@@ -533,7 +616,20 @@ class ArticleProcessor:
                     if postObj is not None:
                         post["shopifyId"]=postObj.id
                         print(f"setting to {postObj.id}",file=sys.stderr)
-                        
+        for page in self.input.get("pages"):
+            print(f"finding id for {page.get('handle')}",file=sys.stderr)
+            postObj = None
+            if page.get("shopifyId") is not None:
+                try:
+                    postObj = shopify.Page.get(page["shopifyId"])
+                    if postObj.id!=page.get("shopifyId"):
+                        page["shopifyId"]=postObj.id
+                        print(f"setting to {postObj.id}",file=sys.stderr)
+                except:
+                    postObj = self.getPageByHandle(page.get("handle"))
+                    if postObj is not None:
+                        page["shopifyId"]=postObj.id
+                        print(f"setting to {postObj.id}",file=sys.stderr)
         return self               
             
         
@@ -558,12 +654,13 @@ class WordpressImporter:
         self.input = xmltodict.parse(open(wordpressFile).read().replace("wp:",""))
         self.config_obj = json.load(open("config.json"))
         self.outputFile = outputFile
-        self.parsed = {"poasts":[]}
+        self.parsed = {"poasts":[],"pages":[]}
         
         if self.outputFile is not None:
             if pathlib.Path(self.outputFile).exists():
                 self.parsed = json.load(open(self.outputFile))
-        self.handles = [x.get("handle") for x in self.parsed.get("poasts")]
+        self.post_handles = [x.get("handle") for x in self.parsed.get("poasts")]
+        self.page_handles = [x.get("handle") for x in self.parsed.get("pages")]
       
             
                 
@@ -578,20 +675,46 @@ class WordpressImporter:
         
     def run(self):
         for post in filter(lambda x:x["post_type"]=="post",jpath("rss.channel.item",self.input)):
-            if post.get("post_name") in self.handles:
+            if post.get("post_name") in self.post_handles:
                 found = False
                 index = 0
                 for poast in self.parsed["poasts"]:
                     if poast.get("handle")==post.get("post_name"):
                         if poast.get("shopifyId") is None:
                             found = True
-                            self.parsed["poasts"][index] = self.postDetails(post)
+                            details = self.postDetails(post)
+                            if details is not None:
+                                self.parsed["poasts"][index] = details
                             break
                     index = index+1
                 if not found:
                     print(f"Skipping {post.get('post_name')}")            
             else:
-                self.parsed.get("poasts").append(self.postDetails(post))
+                details = self.postDetails(post)
+                if details is not None:
+                    self.parsed.get("poasts").append(details)
+        for page in filter(lambda x:x["post_type"]=="page",jpath("rss.channel.item",self.input)):
+            if page.get("content:encoded") is None or page.get("content:encoded")=="":
+                continue
+            if page.get("post_name") in self.page_handles:
+                found = False
+                index = 0
+                for impage in self.parsed["pages"]:
+                    if impage.get("handle")==page.get("post_name"):
+                        if impage.get("shopifyId") is None:
+                            found = True
+                            details = self.postDetails(page)
+                            if details is not None:
+                                self.parsed["pages"][index] = details
+                                break
+                    index = index+1
+                if not found:
+                    print(f"Skipping {page.get('post_name')}")            
+            else:
+                details = self.postDetails(page)
+                if details is not None:
+                    self.parsed.get("pages").append(details)
+        
         return self
     def cached(self,handle):
         if not self.useCache:
@@ -659,7 +782,10 @@ class WordpressImporter:
             return ret[0].get("meta_value")
         return None
     def innerHTML(self,soup):
-        return soup.find("div",class_="elementor-widget-theme-post-content").find("div",class_="elementor-widget-container")
+        innerOuter = soup.find("div",class_="elementor-widget-theme-post-content")
+        if innerOuter is not None:
+            return innerOuter.find("div",class_="elementor-widget-container")
+        return None
         
     def postContent(self,url,handle):
         attempts = 0
@@ -711,6 +837,8 @@ class WordpressImporter:
             if retval["status"]=="active":
                 print(f"Downloading from: {post.get('link')}",file=sys.stderr)
                 retval["html"]=self.postContent(post.get("link"),retval.get("handle"))
+                if retval["html"] is None:
+                    return None
                 time.sleep(1)
             else:
                 retval["html"] = post.get("content:encoded")
