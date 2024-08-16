@@ -418,6 +418,8 @@ class ArticleProcessor:
         if post.get("articleImage") is not None:
             articleImage = self.download(post.get("articleImage"))
             
+            
+            
         post = self.processContent(post)
         post["tags"].append("_imported")
         post["tags"].append(f"_imported-as-{post['status']}")
@@ -492,7 +494,13 @@ class ArticleProcessor:
         page = self.processContent(page)
         articleImage = None
         if page.get("articleImage") is not None:
-            articleImage = self.download(page.get("articleImage"))
+            articleImage = self.download(
+                page.get("articleImage"),
+                backupFilename=f"{page.get('handle')}-featured"
+            )
+            uploaded = self.uploader(f"{self.config('hostUrl')}/{articleImage}")
+            page["articleImage"] = uploaded.get("url")
+            
             
         pageObj = shopify.Page()
         if page.get("shopifyId") is not None:
@@ -525,7 +533,11 @@ class ArticleProcessor:
             else:
                 print(f"Could not Create Page {page['handle']}",file=sys.stderr)
            
+        return self.pagePostProcess(page)
+    
+    def pagePostProcess(self,page):
         return page
+    
     def run(self):
         
             
