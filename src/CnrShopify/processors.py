@@ -510,7 +510,8 @@ class ArticleProcessor:
                 print(f"error processing {json.dumps(page,indent=1)}")
                 sys.exit()
                 pageObj = shopify.Article()
-                
+        page = self.pagePostProcess(page)
+        
         pageObj.title =page["title"]
         pageObj.body_html = page["html"]        
         pageObj.handle = page["handle"]
@@ -533,7 +534,7 @@ class ArticleProcessor:
             else:
                 print(f"Could not Create Page {page['handle']}",file=sys.stderr)
            
-        return self.pagePostProcess(page)
+        return page
     
     def pagePostProcess(self,page):
         return page
